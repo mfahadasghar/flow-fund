@@ -1,0 +1,30 @@
+{
+  "name": "flowfund",
+  "version": "1.0.0",
+  "description": "Smart Charity & Donation Platform with blockchain transparency",
+  "private": true,
+  "workspaces": [
+    "contracts",
+    "frontend"
+  ],
+  "scripts": {
+    "contracts:test": "cd contracts && npm test",
+    "contracts:deploy:local": "cd contracts && npx hardhat run scripts/deploy.ts --network localhost",
+    "contracts:deploy:sepolia": "cd contracts && npx hardhat run scripts/deploy.ts --network sepolia",
+    "contracts:node": "cd contracts && npx hardhat node",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "dev": "npm run contracts:node",
+    "install:all": "npm install && cd contracts && npm install && cd ../frontend && npm install"
+  },
+  "keywords": [
+    "blockchain",
+    "charity",
+    "donation",
+    "ethereum",
+    "web3",
+    "nextjs"
+  ],
+  "author": "",
+  "license": "MIT"
+}
