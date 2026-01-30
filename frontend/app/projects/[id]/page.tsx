@@ -6,9 +6,9 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useProjects } from '@/hooks/useProjects';
 import { useWallet } from '@/context/WalletContext';
-import { useContract } from '@/hooks/useContract';
 import { ethers } from 'ethers';
-import { ETHERSCAN_URL } from '@/lib/contracts/addresses';
+import { MNEE_ADDRESS, ETHERSCAN_URL, CHAIN_ID, CHAIN_NAME } from '@/lib/contracts/addresses';
+import { MNEE_ABI } from '@/lib/contracts/abis';
 import Link from 'next/link';
 import { ArrowLeft, Users, TrendingUp, Wallet, Heart, AlertCircle, Check, ExternalLink } from 'lucide-react';
 
@@ -18,12 +18,9 @@ export default function ProjectDetailPage() {
   const projectId = params.id ? parseInt(params.id as string) : null;
 
   const { projects, loading: loadingProjects } = useProjects();
-  const { address, isConnected, connect, mneeBalance, updateMneeBalance } = useWallet();
-  const mneeContract = useContract('MNEE');
-  const donationManagerContract = useContract('DONATION_MANAGER');
+  const { address, isConnected, connect, mneeBalance, updateMneeBalance, signer, chainId, switchNetwork } = useWallet();
 
   const [donationAmount, setDonationAmount] = useState<string>('');
-  const [isApproving, setIsApproving] = useState(false);
   const [isDonating, setIsDonating] = useState(false);
   const [txHash, setTxHash] = useState<string>('');
   const [error, setError] = useState<string>('');
@@ -32,9 +29,7 @@ export default function ProjectDetailPage() {
   const project = projects.find((p) => p.id === projectId);
 
   useEffect(() => {
-    // Only redirect if loading is complete, we have projects loaded, but this specific project wasn't found
     if (!loadingProjects && projects.length > 0 && !project && projectId !== null) {
-      // Project not found, redirect to projects page
       router.push('/projects');
     }
   }, [loadingProjects, projects.length, project, projectId, router]);
@@ -45,8 +40,14 @@ export default function ProjectDetailPage() {
       return;
     }
 
-    if (!mneeContract || !donationManagerContract) {
-      setError('Contracts not initialized. Please check configuration.');
+    if (chainId !== CHAIN_ID) {
+      setError(`Please switch to ${CHAIN_NAME} to donate`);
+      await switchNetwork();
+      return;
+    }
+
+    if (!signer) {
+      setError('Wallet not connected properly. Please reconnect.');
       return;
     }
 
@@ -55,8 +56,8 @@ export default function ProjectDetailPage() {
       return;
     }
 
-    if (projectId === null) {
-      setError('Invalid project ID');
+    if (!project) {
+      setError('Project not found');
       return;
     }
 
@@ -66,51 +67,31 @@ export default function ProjectDetailPage() {
     try {
       const amount = ethers.parseEther(donationAmount);
 
-      // Check balance
       if (mneeBalance < amount) {
         setError(`Insufficient MNEE balance. You have ${ethers.formatEther(mneeBalance)} MNEE`);
         return;
       }
 
-      // Step 1: Approve MNEE spending
-      setIsApproving(true);
-      const signer = await mneeContract.runner?.provider?.getSigner();
-      const mneeWithSigner = mneeContract.connect(signer!) as any;
-
-      const approveTx = await mneeWithSigner.approve(
-        await donationManagerContract.getAddress(),
-        amount
-      );
-      await approveTx.wait();
-      setIsApproving(false);
-
-      // Step 2: Make donation (100% to this project)
       setIsDonating(true);
-      const projectIds = [projectId];
-      const percentages = [10000]; // 100% in basis points
 
-      const donationSigner = await donationManagerContract.runner?.provider?.getSigner();
-      const donationWithSigner = donationManagerContract.connect(donationSigner!) as any;
-
-      const donateTx = await donationWithSigner.donate(projectIds, percentages, amount);
-      const receipt = await donateTx.wait();
+      // Direct MNEE transfer to project wallet
+      const mneeContract = new ethers.Contract(MNEE_ADDRESS, MNEE_ABI, signer);
+      const tx = await mneeContract.transfer(project.wallet, amount);
+      const receipt = await tx.wait();
 
       setTxHash(receipt.hash);
       setSuccessMessage('Donation successful! Thank you for your contribution.');
-      setIsDonating(false);
-
-      // Reset form
       setDonationAmount('');
-
-      // Update balance
       await updateMneeBalance();
     } catch (err: any) {
       console.error('Donation error:', err);
       setError(err.message || 'Transaction failed');
-      setIsApproving(false);
+    } finally {
       setIsDonating(false);
     }
   };
+
+  const isWrongNetwork = isConnected && chainId !== CHAIN_ID;
 
   if (loadingProjects) {
     return (
@@ -124,7 +105,7 @@ export default function ProjectDetailPage() {
   }
 
   if (!project) {
-    return null; // Will redirect in useEffect
+    return null;
   }
 
   return (
@@ -150,7 +131,7 @@ export default function ProjectDetailPage() {
           </span>
           <span className="text-gray-600">Project #{project.id}</span>
         </div>
-        <p className="text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed">{project.description}</p>
+        <p className="text-lg text-gray-600">{project.description}</p>
       </div>
 
       {/* Stats Cards */}
@@ -190,7 +171,7 @@ export default function ProjectDetailPage() {
             </div>
             <div>
               <div className="text-sm text-gray-600">Project Wallet</div>
-              <div className="text-sm font-mono text-gray-900 truncate">
+              <div className="text-sm font-mono text-gray-900">
                 {project.wallet.slice(0, 10)}...{project.wallet.slice(-8)}
               </div>
             </div>
@@ -202,7 +183,7 @@ export default function ProjectDetailPage() {
       {error && (
         <Card className="mb-8 bg-red-50 border-red-300">
           <div className="flex items-start space-x-3">
-            <AlertCircle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <AlertCircle className="w-5 h-5 text-red-600" />
             <p className="text-red-600">{error}</p>
           </div>
         </Card>
@@ -211,9 +192,9 @@ export default function ProjectDetailPage() {
       {successMessage && (
         <Card className="mb-8 bg-green-50 border-green-300">
           <div className="flex items-start space-x-3">
-            <Check className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <Check className="w-5 h-5 text-green-600" />
             <div>
-              <p className="text-green-600 font-semibold mb-2">{successMessage}</p>
+              <p className="text-green-600">{successMessage}</p>
               {txHash && (
                 <a
                   href={`${ETHERSCAN_URL}/tx/${txHash}`}
@@ -241,20 +222,20 @@ export default function ProjectDetailPage() {
                   <Heart className="w-5 h-5 text-primary-600 mr-2" />
                   Mission
                 </h3>
-                <p className="text-gray-700 leading-relaxed">{project.description}</p>
+                <p className="text-gray-700">{project.description}</p>
               </div>
 
               <div className="border-t border-gray-200 pt-6">
                 <h3 className="font-semibold text-lg mb-4">Project Details</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-gray-50 p-4 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-1">Project ID</div>
+                    <div className="text-sm text-gray-600">Project ID</div>
                     <div className="font-semibold text-lg">#{project.id}</div>
                   </div>
                   <div className="bg-gray-50 p-4 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-1">Status</div>
+                    <div className="text-sm text-gray-600">Status</div>
                     <div className="font-semibold text-lg">
-                      {project.isActive ? (
+                      {project.active ? (
                         <span className="text-green-600">Active</span>
                       ) : (
                         <span className="text-gray-600">Inactive</span>
@@ -262,11 +243,11 @@ export default function ProjectDetailPage() {
                     </div>
                   </div>
                   <div className="bg-gray-50 p-4 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-1">Total Received</div>
+                    <div className="text-sm text-gray-600">Total Received</div>
                     <div className="font-semibold text-lg">{ethers.formatEther(project.totalReceived)} MNEE</div>
                   </div>
                   <div className="bg-gray-50 p-4 rounded-lg">
-                    <div className="text-sm text-gray-600 mb-1">Wallet Address</div>
+                    <div className="text-sm text-gray-600">Wallet Address</div>
                     <div className="font-mono text-xs break-all font-medium">{project.wallet}</div>
                   </div>
                 </div>
@@ -274,9 +255,8 @@ export default function ProjectDetailPage() {
 
               <div className="border-t border-gray-200 pt-6">
                 <h3 className="font-semibold text-lg mb-3">Blockchain Transparency</h3>
-                <p className="text-gray-700 mb-4 leading-relaxed">
-                  All donations to this project are recorded on the blockchain for complete transparency.
-                  You can verify all transactions and fund allocation on Etherscan.
+                <p className="text-gray-700">
+                  All donations to this project are recorded on the Ethereum blockchain. MNEE is sent directly to the project&apos;s wallet. You can verify all transactions on Etherscan.
                 </p>
                 <a
                   href={`${ETHERSCAN_URL}/address/${project.wallet}`}
@@ -284,7 +264,7 @@ export default function ProjectDetailPage() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center text-primary-600 hover:text-primary-700 font-medium"
                 >
-                  View on Etherscan
+                  View Wallet on Etherscan
                   <ExternalLink className="w-4 h-4 ml-1" />
                 </a>
               </div>
@@ -300,9 +280,9 @@ export default function ProjectDetailPage() {
             {!isConnected && (
               <Card className="mb-4 bg-yellow-50 border-yellow-300">
                 <div className="flex items-start space-x-3">
-                  <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                  <AlertCircle className="w-5 h-5 text-yellow-600" />
                   <div>
-                    <p className="text-yellow-800 font-medium mb-2">Connect your wallet to donate</p>
+                    <p className="text-yellow-800">Connect your wallet to donate</p>
                     <Button onClick={connect} size="sm" className="bg-yellow-600 hover:bg-yellow-700">
                       Connect Wallet
                     </Button>
@@ -311,8 +291,24 @@ export default function ProjectDetailPage() {
               </Card>
             )}
 
+            {isWrongNetwork && (
+              <Card className="mb-4 bg-orange-50 border-orange-300">
+                <div className="flex items-start space-x-3">
+                  <AlertCircle className="w-5 h-5 text-orange-600" />
+                  <div>
+                    <p className="text-orange-800">
+                      Please switch to {CHAIN_NAME}
+                    </p>
+                    <Button onClick={switchNetwork} size="sm" className="bg-orange-600 hover:bg-orange-700">
+                      Switch Network
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
             <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700">
                 Donation Amount (MNEE)
               </label>
               <div className="relative">
@@ -323,12 +319,12 @@ export default function ProjectDetailPage() {
                   onChange={(e) => setDonationAmount(e.target.value)}
                   placeholder="Enter amount"
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-600 focus:border-transparent text-lg font-semibold"
-                  step="0.01"
+                  step="0.0001"
                   min="0"
                 />
               </div>
               {isConnected && (
-                <p className="text-sm text-gray-500 mt-2">
+                <p className="text-sm text-gray-500">
                   Available: {ethers.formatEther(mneeBalance)} MNEE
                 </p>
               )}
@@ -347,16 +343,16 @@ export default function ProjectDetailPage() {
 
             <Button
               onClick={handleDonate}
-              disabled={isApproving || isDonating || !donationAmount || parseFloat(donationAmount) <= 0}
+              disabled={isDonating || !donationAmount || parseFloat(donationAmount) <= 0}
               className="w-full mb-4 bg-primary-600 hover:bg-primary-700 text-white"
               size="lg"
             >
               {!isConnected
                 ? 'Connect Wallet'
-                : isApproving
-                ? 'Approving MNEE...'
+                : isWrongNetwork
+                ? `Switch to ${CHAIN_NAME}`
                 : isDonating
-                ? 'Processing Donation...'
+                ? 'Processing...'
                 : 'Complete Donation'}
             </Button>
 
@@ -367,8 +363,8 @@ export default function ProjectDetailPage() {
               </Link>
             </div>
 
-            <p className="text-xs text-gray-500 text-center mt-4">
-              All transactions are recorded on the blockchain
+            <p className="text-xs text-gray-500">
+              MNEE is sent directly to the project wallet on Ethereum Mainnet
             </p>
           </Card>
         </div>

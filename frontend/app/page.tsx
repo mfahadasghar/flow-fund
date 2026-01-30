@@ -1,15 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { useContract } from '@/hooks/useContract';
 import { useProjects } from '@/hooks/useProjects';
 import { ethers } from 'ethers';
 import { getProjectVisual, formatCurrency } from '@/lib/utils/projectData';
-import { ArrowRight, Shield, Zap, Coins, Users, TrendingUp, Sparkles } from 'lucide-react';
+import { ArrowRight, Shield, Zap, Coins, TrendingUp, Sparkles } from 'lucide-react';
 import { BlockchainVisualization } from '@/components/BlockchainVisualization';
 
 const containerVariants = {
@@ -28,34 +27,19 @@ const itemVariants = {
     y: 0,
     opacity: 1,
     transition: {
-      type: 'spring',
+      type: 'spring' as const,
       stiffness: 100,
     },
   },
 };
 
 export default function HomePage() {
-  const [totalDonated, setTotalDonated] = useState<bigint>(BigInt(0));
-  const [totalDonations, setTotalDonations] = useState<number>(0);
-  const donationManagerContract = useContract('DONATION_MANAGER');
   const { projects } = useProjects();
 
-  useEffect(() => {
-    async function fetchStats() {
-      if (!donationManagerContract) return;
-
-      try {
-        const total = await donationManagerContract.totalDonated();
-        const count = await donationManagerContract.getTotalDonations();
-        setTotalDonated(BigInt(total.toString()));
-        setTotalDonations(Number(count));
-      } catch (error) {
-        console.error('Error fetching stats:', error);
-      }
-    }
-
-    fetchStats();
-  }, [donationManagerContract]);
+  // Calculate total donated from all projects
+  const totalDonated = useMemo(() => {
+    return projects.reduce((sum, p) => sum + p.totalReceived, BigInt(0));
+  }, [projects]);
 
   const stats = [
     {
@@ -71,9 +55,9 @@ export default function HomePage() {
       gradient: 'from-purple-500 to-pink-500',
     },
     {
-      label: 'Total Donations',
-      value: totalDonations.toString(),
-      icon: Users,
+      label: 'Network',
+      value: 'Ethereum',
+      icon: Shield,
       gradient: 'from-orange-500 to-red-500',
     },
   ];
@@ -82,19 +66,19 @@ export default function HomePage() {
     {
       icon: Shield,
       title: 'Blockchain Transparency',
-      description: 'Every donation is recorded on the blockchain, ensuring complete transparency and traceability.',
+      description: 'Every donation is recorded on the Ethereum blockchain, ensuring complete transparency and traceability.',
       gradient: 'from-blue-500 to-blue-600',
     },
     {
       icon: Zap,
-      title: 'Automatic Allocation',
-      description: 'Smart contracts automatically distribute your donations based on your preferred allocation.',
+      title: 'Direct Transfers',
+      description: 'MNEE is sent directly to project wallets with no intermediaries. Track every transaction on Etherscan.',
       gradient: 'from-purple-500 to-purple-600',
     },
     {
       icon: Coins,
       title: 'MNEE Stablecoin',
-      description: 'Donate using MNEE stablecoin for predictable value and low transaction fees.',
+      description: 'Donate using MNEE stablecoin on Ethereum mainnet for predictable value and real impact.',
       gradient: 'from-green-500 to-green-600',
     },
   ];
@@ -123,7 +107,7 @@ export default function HomePage() {
               className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-full px-6 py-2 mb-8"
             >
               <Sparkles className="w-4 h-4" />
-              <span className="text-sm font-medium">Powered by Blockchain Technology</span>
+              <span className="text-sm font-medium">Powered by MNEE on Ethereum</span>
             </motion.div>
 
             <h1 className="text-5xl md:text-7xl font-bold mb-6 leading-tight">
@@ -134,7 +118,7 @@ export default function HomePage() {
             </h1>
 
             <p className="text-xl md:text-2xl mb-10 text-primary-100 max-w-3xl mx-auto">
-              Transparent, automated giving powered by blockchain technology. Support causes you care about with complete transparency.
+              Transparent, direct giving powered by MNEE stablecoin. Support causes you care about with complete blockchain transparency.
             </p>
 
             <motion.div
@@ -177,7 +161,7 @@ export default function HomePage() {
             viewport={{ once: true }}
             className="grid grid-cols-1 md:grid-cols-3 gap-8"
           >
-            {stats.map((stat, index) => {
+            {stats.map((stat) => {
               const Icon = stat.icon;
               return (
                 <motion.div
@@ -191,8 +175,8 @@ export default function HomePage() {
                       <div className={`inline-flex p-3 rounded-xl bg-gradient-to-br ${stat.gradient} mb-4`}>
                         <Icon className="w-6 h-6 text-white" />
                       </div>
-                      <div className="text-4xl font-bold text-gray-900 mb-2">{stat.value}</div>
-                      <div className="text-gray-600 font-medium">{stat.label}</div>
+                      <div className="text-4xl font-bold text-gray-900">{stat.value}</div>
+                      <div className="text-gray-600">{stat.label}</div>
                     </div>
                   </Card>
                 </motion.div>
@@ -211,11 +195,11 @@ export default function HomePage() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
+            <h2 className="text-4xl md:text-5xl font-bold text-gray-900">
               Why Choose FlowFund?
             </h2>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-              Experience the future of charitable giving with cutting-edge blockchain technology
+            <p className="text-xl text-gray-600">
+              Experience transparent charitable giving with real MNEE on Ethereum
             </p>
           </motion.div>
 
@@ -226,7 +210,7 @@ export default function HomePage() {
             viewport={{ once: true }}
             className="grid grid-cols-1 md:grid-cols-3 gap-8"
           >
-            {features.map((feature, index) => {
+            {features.map((feature) => {
               const Icon = feature.icon;
               return (
                 <motion.div
@@ -240,7 +224,7 @@ export default function HomePage() {
                       <Icon className="w-8 h-8 text-white" />
                     </div>
                     <h3 className="text-2xl font-bold mb-4 text-gray-900">{feature.title}</h3>
-                    <p className="text-gray-600 leading-relaxed">{feature.description}</p>
+                    <p className="text-gray-600">{feature.description}</p>
                   </Card>
                 </motion.div>
               );
@@ -261,7 +245,7 @@ export default function HomePage() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
+            <h2 className="text-4xl md:text-5xl font-bold text-gray-900">
               Featured Projects
             </h2>
             <p className="text-xl text-gray-600">
@@ -276,7 +260,7 @@ export default function HomePage() {
             viewport={{ once: true }}
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
           >
-            {projects.slice(0, 3).map((project, index) => {
+            {projects.slice(0, 3).map((project) => {
               const visual = getProjectVisual(project.id);
               const Icon = visual.icon;
 
@@ -300,15 +284,15 @@ export default function HomePage() {
 
                     {/* Project Info */}
                     <div className="p-6">
-                      <h3 className="text-2xl font-bold mb-3 text-gray-900 group-hover:text-primary-600 transition-colors">
+                      <h3 className="text-2xl font-bold mb-3 text-gray-900">
                         {project.name}
                       </h3>
-                      <p className="text-gray-600 mb-4 line-clamp-3">{project.description}</p>
+                      <p className="text-gray-600">{project.description}</p>
 
                       {/* Stats */}
                       <div className="flex items-center justify-between mb-6 p-4 bg-gray-50 rounded-lg">
                         <div>
-                          <div className="text-sm text-gray-500 mb-1">Total Raised</div>
+                          <div className="text-sm text-gray-500">Total Raised</div>
                           <div className="text-2xl font-bold text-primary-600">
                             {formatCurrency(ethers.formatEther(project.totalReceived))} MNEE
                           </div>
@@ -369,7 +353,7 @@ export default function HomePage() {
               Ready to Make a Difference?
             </h2>
             <p className="text-xl md:text-2xl mb-10 text-primary-100 max-w-2xl mx-auto">
-              Start donating today and track your impact on the blockchain with complete transparency
+              Start donating today and track your impact on Etherscan with complete transparency
             </p>
             <Link href="/donate">
               <Button size="lg" variant="ghost" className="bg-white text-primary-600 hover:bg-primary-600 hover:text-white shadow-2xl hover:shadow-glow-lg px-10 py-5 text-lg font-semibold group">

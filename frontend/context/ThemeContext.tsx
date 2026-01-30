@@ -2,36 +2,29 @@
 
 import React, { createContext, useContext, useEffect } from 'react';
 
+type Theme = 'light' | 'dark';
+
 interface ThemeContextType {
-  theme: 'light';
-  resolvedTheme: 'light';
-  setTheme: (theme: 'light') => void;
+  theme: Theme;
+  resolvedTheme: Theme;
+  setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Lock theme to light mode only
   useEffect(() => {
-    const root = window.document.documentElement;
-
     // Always set to light mode
+    const root = window.document.documentElement;
     root.classList.remove('dark');
     root.classList.add('light');
-
-    // Clear any stored theme preferences
     localStorage.removeItem('theme');
   }, []);
 
-  // Dummy functions for backward compatibility
-  const setTheme = () => {
-    // Always light mode, no-op
-  };
-
-  const toggleTheme = () => {
-    // Always light mode, no-op
-  };
+  // No-op functions - always light mode
+  const setTheme = () => {};
+  const toggleTheme = () => {};
 
   return (
     <ThemeContext.Provider value={{

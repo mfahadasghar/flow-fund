@@ -1,9 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { BrowserProvider, ethers } from 'ethers';
+import { BrowserProvider, JsonRpcProvider, ethers } from 'ethers';
 import { WalletState } from '@/types';
-import { CONTRACT_ADDRESSES, CHAIN_ID, CHAIN_NAME } from '@/lib/contracts/addresses';
+import { MNEE_ADDRESS, CHAIN_ID, CHAIN_NAME, RPC_URL } from '@/lib/contracts/addresses';
 import { MNEE_ABI } from '@/lib/contracts/abis';
 
 interface WalletContextType extends WalletState {
@@ -11,7 +11,8 @@ interface WalletContextType extends WalletState {
   disconnect: () => void;
   switchNetwork: () => Promise<void>;
   updateMneeBalance: () => Promise<void>;
-  provider: BrowserProvider | null;
+  provider: BrowserProvider | JsonRpcProvider | null;
+  signer: ethers.Signer | null;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
@@ -24,17 +25,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     isConnected: false,
     mneeBalance: BigInt(0),
   });
-  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [provider, setProvider] = useState<BrowserProvider | JsonRpcProvider | null>(null);
+  const [signer, setSigner] = useState<ethers.Signer | null>(null);
 
   const updateMneeBalance = useCallback(async () => {
-    if (!walletState.address || !provider || !CONTRACT_ADDRESSES.MNEE) return;
+    if (!walletState.address || !provider) return;
 
     try {
-      const mneeContract = new ethers.Contract(
-        CONTRACT_ADDRESSES.MNEE,
-        MNEE_ABI,
-        provider
-      );
+      const mneeContract = new ethers.Contract(MNEE_ADDRESS, MNEE_ABI, provider);
       const balance = await mneeContract.balanceOf(walletState.address);
       setWalletState((prev) => ({ ...prev, mneeBalance: balance }));
     } catch (error) {
@@ -51,15 +49,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setWalletState((prev) => ({ ...prev, isConnecting: true }));
 
     try {
-      // Disable ENS for local network by providing a custom network config
-      const browserProvider = new BrowserProvider(window.ethereum, {
-        ensAddress: null, // Disable ENS on local network
-      } as any);
-
+      const browserProvider = new BrowserProvider(window.ethereum);
       const accounts = await browserProvider.send('eth_requestAccounts', []);
       const network = await browserProvider.getNetwork();
+      const walletSigner = await browserProvider.getSigner();
 
       setProvider(browserProvider);
+      setSigner(walletSigner);
       setWalletState({
         address: accounts[0],
         chainId: Number(network.chainId),
@@ -68,9 +64,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         mneeBalance: BigInt(0),
       });
 
-      // Check if on correct network
+      // Check if on correct network (Ethereum Mainnet)
       if (Number(network.chainId) !== CHAIN_ID) {
-        console.warn(`Please switch to ${CHAIN_NAME} network`);
+        console.warn(`Please switch to ${CHAIN_NAME}`);
       }
     } catch (error: any) {
       console.error('Error connecting wallet:', error);
@@ -87,7 +83,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       isConnected: false,
       mneeBalance: BigInt(0),
     });
-    setProvider(null);
+    setSigner(null);
   };
 
   const switchNetwork = async () => {
@@ -100,8 +96,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (error: any) {
       if (error.code === 4902) {
-        console.error('Network not added to MetaMask');
-        alert(`Please add ${CHAIN_NAME} network to MetaMask`);
+        // Network not added - for mainnet this shouldn't happen
+        alert(`Please add ${CHAIN_NAME} to MetaMask`);
       } else {
         console.error('Error switching network:', error);
       }
@@ -147,7 +143,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [walletState.isConnected, walletState.address, updateMneeBalance]);
 
-  // Check if already connected on mount and set up default provider
+  // Set up provider on mount
   useEffect(() => {
     const setupProvider = async () => {
       if (typeof window.ethereum !== 'undefined') {
@@ -156,7 +152,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
         if (accounts.length > 0) {
           const network = await browserProvider.getNetwork();
+          const walletSigner = await browserProvider.getSigner();
           setProvider(browserProvider);
+          setSigner(walletSigner);
           setWalletState({
             address: accounts[0],
             chainId: Number(network.chainId),
@@ -165,18 +163,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             mneeBalance: BigInt(0),
           });
         } else {
-          // Set provider for read-only access even if not connected
-          setProvider(browserProvider);
+          // Set read-only provider
+          const rpcProvider = new JsonRpcProvider(RPC_URL);
+          setProvider(rpcProvider);
         }
       } else {
-        // Create a JsonRpcProvider for read-only access when MetaMask is not available
-        try {
-          const { JsonRpcProvider } = await import('ethers');
-          const rpcProvider = new JsonRpcProvider('http://127.0.0.1:8545');
-          setProvider(rpcProvider as any);
-        } catch (error) {
-          console.error('Failed to create RPC provider:', error);
-        }
+        // No MetaMask - use read-only provider
+        const rpcProvider = new JsonRpcProvider(RPC_URL);
+        setProvider(rpcProvider);
       }
     };
 
@@ -192,6 +186,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         switchNetwork,
         updateMneeBalance,
         provider,
+        signer,
       }}
     >
       {children}

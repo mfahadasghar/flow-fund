@@ -5,26 +5,24 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useProjects } from '@/hooks/useProjects';
 import { useWallet } from '@/context/WalletContext';
-import { useContract } from '@/hooks/useContract';
 import { ethers } from 'ethers';
-import { ETHERSCAN_URL } from '@/lib/contracts/addresses';
+import { MNEE_ADDRESS, ETHERSCAN_URL, CHAIN_ID, CHAIN_NAME } from '@/lib/contracts/addresses';
+import { MNEE_ABI } from '@/lib/contracts/abis';
 import { Check, Heart, TrendingUp, Wallet, AlertCircle } from 'lucide-react';
 
 export default function DonatePage() {
   const { projects, loading: loadingProjects } = useProjects();
-  const { address, isConnected, connect, mneeBalance, updateMneeBalance } = useWallet();
-  const mneeContract = useContract('MNEE');
-  const donationManagerContract = useContract('DONATION_MANAGER');
+  const { address, isConnected, connect, mneeBalance, updateMneeBalance, signer, chainId, switchNetwork } = useWallet();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedProjects, setSelectedProjects] = useState<Set<number>>(new Set());
   const [allocations, setAllocations] = useState<Map<number, number>>(new Map());
   const [totalAmount, setTotalAmount] = useState<string>('');
-  const [isApproving, setIsApproving] = useState(false);
   const [isDonating, setIsDonating] = useState(false);
-  const [txHash, setTxHash] = useState<string>('');
+  const [txHashes, setTxHashes] = useState<string[]>([]);
   const [error, setError] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string>('');
+  const [currentTransfer, setCurrentTransfer] = useState<string>('');
 
   // Auto-distribute percentages equally when projects are selected
   useEffect(() => {
@@ -93,8 +91,15 @@ export default function DonatePage() {
       return;
     }
 
-    if (!mneeContract || !donationManagerContract) {
-      setError('Contracts not initialized. Please check configuration.');
+    // Check network
+    if (chainId !== CHAIN_ID) {
+      setError(`Please switch to ${CHAIN_NAME} to donate`);
+      await switchNetwork();
+      return;
+    }
+
+    if (!signer) {
+      setError('Wallet not connected properly. Please reconnect.');
       return;
     }
 
@@ -114,44 +119,41 @@ export default function DonatePage() {
       return;
     }
 
+    const totalWei = ethers.parseEther(totalAmount);
+    if (mneeBalance < totalWei) {
+      setError(`Insufficient MNEE balance. You have ${ethers.formatEther(mneeBalance)} MNEE`);
+      return;
+    }
+
     setError('');
     setSuccessMessage('');
+    setTxHashes([]);
+    setIsDonating(true);
 
     try {
-      const amount = ethers.parseEther(totalAmount);
+      const mneeContract = new ethers.Contract(MNEE_ADDRESS, MNEE_ABI, signer);
+      const hashes: string[] = [];
 
-      // Check balance
-      if (mneeBalance < amount) {
-        setError(`Insufficient MNEE balance. You have ${ethers.formatEther(mneeBalance)} MNEE`);
-        return;
+      // Send MNEE directly to each project wallet
+      for (const projectId of selectedProjects) {
+        const project = projects.find(p => p.id === projectId);
+        if (!project) continue;
+
+        const percentage = allocations.get(projectId) || 0;
+        const amount = (BigInt(totalWei) * BigInt(Math.round(percentage * 100))) / BigInt(10000);
+
+        if (amount <= 0) continue;
+
+        setCurrentTransfer(`Sending ${ethers.formatEther(amount)} MNEE to ${project.name}...`);
+
+        const tx = await mneeContract.transfer(project.wallet, amount);
+        const receipt = await tx.wait();
+        hashes.push(receipt.hash);
       }
 
-      // Step 1: Approve MNEE spending
-      setIsApproving(true);
-      const signer = await mneeContract.runner?.provider?.getSigner();
-      const mneeWithSigner = mneeContract.connect(signer!) as any;
-
-      const approveTx = await mneeWithSigner.approve(
-        await donationManagerContract.getAddress(),
-        amount
-      );
-      await approveTx.wait();
-      setIsApproving(false);
-
-      // Step 2: Make donation
-      setIsDonating(true);
-      const projectIds = Array.from(selectedProjects);
-      const percentages = projectIds.map((id) => Math.round((allocations.get(id) || 0) * 100));
-
-      const donationSigner = await donationManagerContract.runner?.provider?.getSigner();
-      const donationWithSigner = donationManagerContract.connect(donationSigner!) as any;
-
-      const donateTx = await donationWithSigner.donate(projectIds, percentages, amount);
-      const receipt = await donateTx.wait();
-
-      setTxHash(receipt.hash);
-      setSuccessMessage('Donation successful! Thank you for making a difference.');
-      setIsDonating(false);
+      setTxHashes(hashes);
+      setSuccessMessage(`Donation successful! ${hashes.length} transfer(s) completed.`);
+      setCurrentTransfer('');
 
       // Reset form
       setSelectedProjects(new Set());
@@ -164,7 +166,8 @@ export default function DonatePage() {
     } catch (err: any) {
       console.error('Donation error:', err);
       setError(err.message || 'Transaction failed');
-      setIsApproving(false);
+      setCurrentTransfer('');
+    } finally {
       setIsDonating(false);
     }
   };
@@ -175,14 +178,15 @@ export default function DonatePage() {
 
   const canProceedToStep2 = selectedProjects.size > 0;
   const canProceedToStep3 = canProceedToStep2 && Math.abs(getTotalPercentage() - 100) < 0.01;
+  const isWrongNetwork = isConnected && chainId !== CHAIN_ID;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       {/* Header */}
       <div className="mb-8 text-center">
-        <h1 className="text-4xl font-bold text-gray-900 mb-2">Make a Donation</h1>
+        <h1 className="text-4xl font-bold text-gray-900">Make a Donation</h1>
         <p className="text-gray-600">
-          Support multiple charity projects with transparent, automated fund allocation
+          Support charity projects with direct MNEE transfers on Ethereum
         </p>
       </div>
 
@@ -257,11 +261,27 @@ export default function DonatePage() {
       {!isConnected && (
         <Card className="mb-8 bg-yellow-50 border-yellow-300">
           <div className="flex items-start space-x-3">
-            <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5" />
+            <AlertCircle className="w-5 h-5 text-yellow-600" />
             <div>
-              <p className="text-yellow-800 font-medium mb-2">Connect your wallet to continue</p>
+              <p className="text-yellow-800">Connect your wallet to continue</p>
               <Button onClick={connect} size="sm" className="bg-yellow-600 hover:bg-yellow-700">
                 Connect Wallet
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {isWrongNetwork && (
+        <Card className="mb-8 bg-orange-50 border-orange-300">
+          <div className="flex items-start space-x-3">
+            <AlertCircle className="w-5 h-5 text-orange-600" />
+            <div>
+              <p className="text-orange-800">
+                Please switch to {CHAIN_NAME} to donate
+              </p>
+              <Button onClick={switchNetwork} size="sm" className="bg-orange-600 hover:bg-orange-700">
+                Switch Network
               </Button>
             </div>
           </div>
@@ -271,7 +291,7 @@ export default function DonatePage() {
       {error && (
         <Card className="mb-8 bg-red-50 border-red-300">
           <div className="flex items-start space-x-3">
-            <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+            <AlertCircle className="w-5 h-5 text-red-600" />
             <p className="text-red-600">{error}</p>
           </div>
         </Card>
@@ -280,19 +300,20 @@ export default function DonatePage() {
       {successMessage && (
         <Card className="mb-8 bg-green-50 border-green-300">
           <div className="flex items-start space-x-3">
-            <Check className="w-5 h-5 text-green-600 mt-0.5" />
+            <Check className="w-5 h-5 text-green-600" />
             <div>
-              <p className="text-green-600 font-semibold mb-2">{successMessage}</p>
-              {txHash && (
+              <p className="text-green-600">{successMessage}</p>
+              {txHashes.map((hash, i) => (
                 <a
-                  href={`${ETHERSCAN_URL}/tx/${txHash}`}
+                  key={hash}
+                  href={`${ETHERSCAN_URL}/tx/${hash}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-primary-600 hover:underline text-sm"
+                  className="block text-primary-600 hover:underline text-sm"
                 >
-                  View Transaction on Etherscan →
+                  View Transaction {i + 1} on Etherscan
                 </a>
-              )}
+              ))}
             </div>
           </div>
         </Card>
@@ -325,8 +346,8 @@ export default function DonatePage() {
                         onClick={() => toggleProject(project.id)}
                         className={`relative border-2 rounded-xl p-5 cursor-pointer transition-all hover:shadow-md ${
                           isSelected
-                            ? 'border-primary-600 bg-primary-50 shadow-sm'
-                            : 'border-gray-200 hover:border-primary-300'
+                            ? 'border-primary-600 bg-primary-50'
+                            : 'border-gray-200'
                         }`}
                       >
                         {isSelected && (
@@ -340,7 +361,7 @@ export default function DonatePage() {
                           </div>
                           <div className="flex-1">
                             <h3 className="font-bold text-lg text-gray-900">{project.name}</h3>
-                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                            <p className="text-sm text-gray-600">
                               {project.description}
                             </p>
                           </div>
@@ -363,7 +384,7 @@ export default function DonatePage() {
                     className="bg-primary-600 hover:bg-primary-700 text-white"
                     size="lg"
                   >
-                    Continue to Allocation →
+                    Continue to Allocation
                   </Button>
                 </div>
               </>
@@ -396,7 +417,7 @@ export default function DonatePage() {
               {selectedProjectsList.map((project) => {
                 const percentage = allocations.get(project!.id) || 0;
                 return (
-                  <div key={project!.id} className="border rounded-lg p-4 bg-gray-50">
+                  <div key={project!.id} className="border rounded-lg p-4 bg-gray-50 border-gray-200">
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center space-x-3">
                         <div className="bg-primary-100 p-2 rounded-lg">
@@ -404,7 +425,9 @@ export default function DonatePage() {
                         </div>
                         <div>
                           <h3 className="font-semibold text-gray-900">{project!.name}</h3>
-                          <p className="text-xs text-gray-500">Project #{project!.id}</p>
+                          <p className="text-xs text-gray-500">
+                            {project!.wallet.slice(0, 6)}...{project!.wallet.slice(-4)}
+                          </p>
                         </div>
                       </div>
                       <button
@@ -436,7 +459,7 @@ export default function DonatePage() {
                           max="100"
                           step="0.1"
                         />
-                        <span className="text-gray-700 font-medium">%</span>
+                        <span className="text-gray-700">%</span>
                       </div>
                     </div>
                   </div>
@@ -444,7 +467,7 @@ export default function DonatePage() {
               })}
             </div>
 
-            <div className="bg-gray-100 rounded-lg p-4 mb-6">
+            <div className="bg-gray-100 rounded-lg p-4">
               <div className="flex justify-between items-center">
                 <span className="font-semibold text-gray-700">Total Allocation:</span>
                 <span
@@ -466,7 +489,7 @@ export default function DonatePage() {
 
             <div className="flex justify-between">
               <Button onClick={() => setStep(1)} variant="outline" size="lg">
-                ← Back to Selection
+                Back to Selection
               </Button>
               <Button
                 onClick={() => setStep(3)}
@@ -474,7 +497,7 @@ export default function DonatePage() {
                 className="bg-primary-600 hover:bg-primary-700 text-white"
                 size="lg"
               >
-                Continue to Review →
+                Continue to Review
               </Button>
             </div>
           </Card>
@@ -495,16 +518,19 @@ export default function DonatePage() {
                   return (
                     <div key={project!.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                       <div className="flex items-center space-x-3">
-                        <div className="bg-primary-100 p-2 rounded-lg">
+                        <div className="bg-primary-100">
                           <Heart className="w-5 h-5 text-primary-600" />
                         </div>
                         <div>
                           <h3 className="font-semibold text-gray-900">{project!.name}</h3>
                           <p className="text-sm text-gray-600">{percentage.toFixed(1)}% allocation</p>
+                          <p className="text-xs text-gray-400">
+                            {project!.wallet}
+                          </p>
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="font-bold text-primary-600">{amount.toFixed(2)} MNEE</div>
+                        <div className="font-bold text-primary-600">{amount.toFixed(4)} MNEE</div>
                       </div>
                     </div>
                   );
@@ -513,7 +539,7 @@ export default function DonatePage() {
 
               <div className="flex justify-start">
                 <Button onClick={() => setStep(2)} variant="outline" size="lg">
-                  ← Back to Allocation
+                  Back to Allocation
                 </Button>
               </div>
             </Card>
@@ -524,7 +550,7 @@ export default function DonatePage() {
               <h2 className="text-xl font-bold mb-4">Payment</h2>
 
               <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700">
                   Total Donation Amount (MNEE)
                 </label>
                 <div className="relative">
@@ -535,12 +561,12 @@ export default function DonatePage() {
                     onChange={(e) => setTotalAmount(e.target.value)}
                     placeholder="Enter amount"
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-600 focus:border-transparent text-lg font-semibold"
-                    step="0.01"
+                    step="0.0001"
                     min="0"
                   />
                 </div>
                 {isConnected && (
-                  <p className="text-sm text-gray-500 mt-2">
+                  <p className="text-sm text-gray-500">
                     Available: {ethers.formatEther(mneeBalance)} MNEE
                   </p>
                 )}
@@ -556,32 +582,38 @@ export default function DonatePage() {
                     <span className="text-gray-600">Total Amount:</span>
                     <span className="font-medium">{totalAmount || '0'} MNEE</span>
                   </div>
-                  <div className="border-t border-primary-200 pt-2 mt-2">
+                  <div className="border-t border-primary-200">
                     <div className="flex justify-between font-bold text-base">
-                      <span>You will donate:</span>
+                      <span className="dark:text-white">You will donate:</span>
                       <span className="text-primary-600">{totalAmount || '0'} MNEE</span>
                     </div>
                   </div>
                 </div>
               </div>
 
+              {currentTransfer && (
+                <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-sm text-blue-600">{currentTransfer}</p>
+                </div>
+              )}
+
               <Button
                 onClick={handleDonate}
-                disabled={isApproving || isDonating || !totalAmount || parseFloat(totalAmount) <= 0}
+                disabled={isDonating || !totalAmount || parseFloat(totalAmount) <= 0}
                 className="w-full bg-primary-600 hover:bg-primary-700 text-white"
                 size="lg"
               >
                 {!isConnected
                   ? 'Connect Wallet'
-                  : isApproving
-                  ? 'Approving MNEE...'
+                  : isWrongNetwork
+                  ? `Switch to ${CHAIN_NAME}`
                   : isDonating
-                  ? 'Processing Donation...'
+                  ? 'Processing...'
                   : 'Complete Donation'}
               </Button>
 
-              <p className="text-xs text-gray-500 text-center mt-4">
-                By donating, you agree that all transactions are recorded on the blockchain
+              <p className="text-xs text-gray-500">
+                MNEE will be sent directly to each project&apos;s wallet on Ethereum Mainnet
               </p>
             </Card>
           </div>
